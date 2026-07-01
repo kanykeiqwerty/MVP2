@@ -1,0 +1,45 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # Database
+    database_url: str
+    # SSL для управляемого PostgreSQL (Timeweb): disable | require | verify-ca | verify-full
+    # Если пусто — берётся sslmode из query-строки DATABASE_URL.
+    db_ssl: str = ""
+    db_ssl_root_cert: str = ""  # путь к root CA, напр. /app/certs/root.crt
+
+   
+
+    # Auth / JWT
+    secret_key: str
+    algorithm: str = "HS256"
+    access_token_expire_minutes: int = 60 * 24  # 1 day
+    refresh_token_expire_days: int = 30
+
+    
+    # Email (SMTP) — для отправки кода сброса пароля
+    EMAIL_FROM: str = ""
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+
+    # App
+    app_env: str = "development"
+    log_level: str = "INFO"
+    api_v1_prefix: str = "/api/v1"
+
+    # Telegram alerts — forwards ERROR/WARNING logs to a chat (disabled if unset)
+    telegram_bot_token: str = ""
+    telegram_alert_chat_id: str = ""
+
+
+settings = Settings()  # type: ignore[call-arg]
