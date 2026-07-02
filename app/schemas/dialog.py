@@ -76,7 +76,7 @@ class MessageRead(BaseModel):
     status: MessageStatus
     error_message: str | None = None
     created_at: datetime
-    sources: list[MessageSourceRead] = []
+    sources: list[MessageSourceDetailed] = []
  
  
 class ConversationWithMessages(ConversationRead):

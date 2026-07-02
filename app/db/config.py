@@ -1,3 +1,4 @@
+import uuid
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -68,6 +69,14 @@ class Settings(BaseSettings):
 
     # --- Очередь ---
     REDIS_URL: str = "redis://localhost:6379/0"
+
+    # --- Диалог / RAG ---
+    CHAT_MODEL: str = "gpt-4o-mini"
+    RETRIEVAL_TOP_K: int = 5
+    RETRIEVAL_MIN_SCORE: float = 0.15
+    # Пока нет JWT-авторизации — все диалоги идут от одного служебного юзера,
+    # который создаётся автоматически при старте приложения (см. main.py).
+    DEFAULT_USER_ID: uuid.UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 settings = Settings()  # type: ignore[call-arg]
