@@ -4,20 +4,23 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.models.documents import DocumentFileType, DocumentStatus
+from app.models.documents import Document, DocumentFileType, DocumentStatus
 from app.schemas.documents import (
     DocumentListResponse,
     DocumentRead,
+    DocumentUpdate,
 )
-from app.services.documents_service import (
-    DocumentValidationError,
-    create_document,
-    delete_document,
-    get_document,
-    list_documents,
-)
+from app.services import documents_service
+from app.services.documents_service import DocumentValidationError
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
+
+
+async def _get_document_or_404(session: AsyncSession, document_id: uuid.UUID) -> Document:
+    document = await documents_service.get_document(session, document_id)
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Документ не найден")
+    return document
 
 
 @router.post(
@@ -31,7 +34,7 @@ async def upload_document(
     session: AsyncSession = Depends(get_db),
 ):
     try:
-        document = await create_document(
+        return await documents_service.create_document(
             session=session,
             file=file,
             title=title,
@@ -42,8 +45,6 @@ async def upload_document(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
-
-    return document
 
 
 @router.get(
@@ -58,7 +59,7 @@ async def get_documents(
     search: str | None = None,
     session: AsyncSession = Depends(get_db),
 ):
-    documents, total = await list_documents(
+    documents, total = await documents_service.list_documents(
         session=session,
         page=page,
         page_size=page_size,
@@ -83,15 +84,17 @@ async def get_document_by_id(
     document_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
 ):
-    document = await get_document(session, document_id)
+    return await _get_document_or_404(session, document_id)
 
-    if document is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found",
-        )
 
-    return document
+@router.patch("/{document_id}", response_model=DocumentRead)
+async def update_document(
+    document_id: uuid.UUID,
+    payload: DocumentUpdate,
+    session: AsyncSession = Depends(get_db),
+):
+    document = await _get_document_or_404(session, document_id)
+    return await documents_service.update_title(session, document, payload.title)
 
 
 @router.delete(
@@ -102,12 +105,20 @@ async def remove_document(
     document_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
 ):
-    document = await get_document(session, document_id)
+    document = await _get_document_or_404(session, document_id)
+    await documents_service.delete_document(session, document)
 
-    if document is None:
+
+# ---------- Переиндексация ----------
+
+
+@router.post("/{document_id}/reindex", response_model=DocumentRead)
+async def reindex_document(document_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
+    document = await _get_document_or_404(session, document_id)
+    try:
+        return await documents_service.requeue_for_reindex(session, document)
+    except DocumentValidationError as e:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found",
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
         )
-
-    await delete_document(session, document)

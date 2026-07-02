@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.db.config import settings
 from app.models.documents import Document, DocumentChunk, DocumentFileType, DocumentStatus, DocumentStatusLog
 from app.services.storage import StorageError, get_storage_backend
+from app.workers.tasks import index_document
 
 ALLOWED_EXTENSIONS = set(settings.ALLOWED_EXTENSIONS)
 MAX_UPLOAD_BYTES = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
@@ -62,7 +63,7 @@ async def create_document(
 
     storage = get_storage_backend()
     document.storage_path = storage.save(
-        filename=file.filename,  # type: ignore[arg-type]
+        filename=f"{document.id}.{file_type.value}",
         content=content,
         folder=str(document.id),
     )
@@ -70,6 +71,8 @@ async def create_document(
     session.add(DocumentStatusLog(document_id=document.id, status=DocumentStatus.queued))
     await session.commit()
     await session.refresh(document)
+
+    index_document.delay(str(document.id))
     return document
 
 
@@ -117,6 +120,13 @@ async def get_document_with_logs(session: AsyncSession, document_id: uuid.UUID) 
     return (await session.execute(query)).scalar_one_or_none()
 
 
+async def update_title(session: AsyncSession, document: Document, title: str) -> Document:
+    document.title = title
+    await session.commit()
+    await session.refresh(document)
+    return document
+
+
 async def delete_document(session: AsyncSession, document: Document) -> None:
     storage = get_storage_backend()
     try:
@@ -127,3 +137,22 @@ async def delete_document(session: AsyncSession, document: Document) -> None:
     await session.commit()
 
 
+async def requeue_for_reindex(session: AsyncSession, document: Document) -> Document:
+    if document.status == DocumentStatus.indexing:
+        raise DocumentValidationError("Документ уже находится в процессе индексации")
+
+    document.status = DocumentStatus.queued
+    document.error_message = None
+    session.add(document)
+    session.add(
+        DocumentStatusLog(
+            document_id=document.id,
+            status=DocumentStatus.queued,
+            message="Поставлен на переиндексацию",
+        )
+    )
+    await session.commit()
+    await session.refresh(document)
+
+    index_document.delay(str(document.id))
+    return document

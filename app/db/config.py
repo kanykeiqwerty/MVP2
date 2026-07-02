@@ -66,5 +66,8 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 150
 
+    # --- Очередь ---
+    REDIS_URL: str = "redis://localhost:6379/0"
+
 
 settings = Settings()  # type: ignore[call-arg]
