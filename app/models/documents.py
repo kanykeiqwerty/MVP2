@@ -1,8 +1,11 @@
 
+from __future__ import annotations
+
 import enum
 import uuid
 from datetime import datetime
- 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import (
     Boolean,
     ForeignKey,
@@ -20,6 +23,9 @@ from sqlalchemy.sql import func
 from pgvector.sqlalchemy import Vector
 
 from app.models.user import User
+
+if TYPE_CHECKING:
+    from app.models.dialog import MessageSource
 
 from app.db.base import Base
  
@@ -59,8 +65,8 @@ class Document(Base):
         default=DocumentStatus.queued,
     )
     error_message: Mapped[str | None] = mapped_column(Text)
-    uploaded_by: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     uploaded_at: Mapped[datetime] = mapped_column(server_default=func.now())
     indexed_at: Mapped[datetime | None]
@@ -68,7 +74,7 @@ class Document(Base):
         server_default=func.now(), onupdate=func.now()
     )
  
-    uploader: Mapped["User"] = relationship(back_populates="uploaded_documents")
+    uploader: Mapped["User"] = relationship()
     chunks: Mapped[list["DocumentChunk"]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )

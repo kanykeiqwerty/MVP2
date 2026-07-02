@@ -88,14 +88,14 @@ class DocumentRead(DocumentBase):
     отдавать его наружу — лишняя утечка деталей реализации.
     """
     model_config = ConfigDict(from_attributes=True)
- 
+
     id: uuid.UUID
     original_filename: str
     file_type: DocumentFileType
     file_size_bytes: int
     status: DocumentStatus
     error_message: str | None = None
-    uploaded_by: uuid.UUID
+    uploaded_by: uuid.UUID | None = None
     uploaded_at: datetime
     indexed_at: datetime | None = None
     updated_at: datetime

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +34,10 @@ class Settings(BaseSettings):
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
 
+    # Storage
+    storage_backend: str = "local"
+    local_storage_dir: Path = Path("uploads")
+
     # App
     app_env: str = "development"
     log_level: str = "INFO"
@@ -40,6 +46,15 @@ class Settings(BaseSettings):
     # Telegram alerts — forwards ERROR/WARNING logs to a chat (disabled if unset)
     telegram_bot_token: str = ""
     telegram_alert_chat_id: str = ""
+
+
+    ALLOWED_EXTENSIONS: list[str] = [
+        "pdf",
+        "docx",
+        "txt",
+    ]
+
+    MAX_UPLOAD_SIZE_MB: int = 20
 
 
 settings = Settings()  # type: ignore[call-arg]

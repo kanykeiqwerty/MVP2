@@ -49,7 +49,7 @@ class Conversation(Base):
         server_default=func.now(), onupdate=func.now()
     )
  
-    user: Mapped["User"] = relationship(back_populates="conversations")
+    user: Mapped["User"] = relationship()
     messages: Mapped[list["Message"]] = relationship(
         back_populates="conversation",
         cascade="all, delete-orphan",
@@ -135,5 +135,5 @@ class MessageFeedback(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
  
     message: Mapped["Message"] = relationship(back_populates="feedback")
-    user: Mapped["User"] = relationship(back_populates="feedback")
+    user: Mapped["User"] = relationship()
  

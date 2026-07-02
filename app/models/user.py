@@ -32,11 +32,11 @@ class User(Base):
     
 
     
-    refresh_tokens: Mapped[list["RefreshToken"]] = relationship(back_populates="user", cascade="all, delete-orphan")  # type: ignore[name-defined]
-    reset_codes: Mapped[list["PasswordResetCode"]] = relationship(back_populates="user", cascade="all, delete-orphan")  # type: ignore[name-defined]
-    uploaded_documents: Mapped[list["Document"]] = relationship(back_populates="uploader")  # type: ignore[name-defined]
-    conversations: Mapped[list["Conversation"]] = relationship(back_populates="user", cascade="all, delete-orphan")  # type: ignore[name-defined]
-    feedback: Mapped[list["MessageFeedback"]] = relationship(back_populates="user", cascade="all, delete-orphan")  # type: ignore[name-defined]
+    # refresh_tokens: Mapped[list["RefreshToken"]] = relationship(back_populates="user", cascade="all, delete-orphan")  # type: ignore[name-defined]
+    # reset_codes: Mapped[list["PasswordResetCode"]] = relationship(back_populates="user", cascade="all, delete-orphan")  # type: ignore[name-defined]
+    # uploaded_documents: Mapped[list["Document"]] = relationship(back_populates="uploader")  # type: ignore[name-defined]
+    # conversations: Mapped[list["Conversation"]] = relationship(back_populates="user", cascade="all, delete-orphan")  # type: ignore[name-defined]
+    # feedback: Mapped[list["MessageFeedback"]] = relationship(back_populates="user", cascade="all, delete-orphan")  # type: ignore[name-defined]
 
     
     @property
