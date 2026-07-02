@@ -56,5 +56,15 @@ class Settings(BaseSettings):
 
     MAX_UPLOAD_SIZE_MB: int = 20
 
+    # --- Эмбеддинги ---
+    OPENAI_API_KEY: str = ""
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    EMBEDDING_DIM: int = 1536
+    EMBEDDING_BATCH_SIZE: int = 64
+
+    # --- Чанкинг ---
+    CHUNK_SIZE: int = 1000
+    CHUNK_OVERLAP: int = 150
+
 
 settings = Settings()  # type: ignore[call-arg]
