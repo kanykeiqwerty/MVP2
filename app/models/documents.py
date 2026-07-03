@@ -131,4 +131,6 @@ class DocumentChunk(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
  
     document: Mapped["Document"] = relationship(back_populates="chunks")
-    sources: Mapped[list["MessageSource"]] = relationship(back_populates="document_chunk")
+    sources: Mapped[list["MessageSource"]] = relationship(
+        back_populates="document_chunk", passive_deletes=True
+    )
