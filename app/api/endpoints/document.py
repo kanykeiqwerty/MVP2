@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.deps import ManagerUser
 from app.db.session import get_db
 from app.models.documents import Document, DocumentFileType, DocumentStatus
 from app.schemas.documents import (
@@ -29,6 +30,7 @@ async def _get_document_or_404(session: AsyncSession, document_id: uuid.UUID) ->
     status_code=status.HTTP_201_CREATED,
 )
 async def upload_document(
+    user: ManagerUser,
     file: UploadFile = File(...),
     title: str | None = Form(None),
     session: AsyncSession = Depends(get_db),
@@ -38,7 +40,7 @@ async def upload_document(
             session=session,
             file=file,
             title=title,
-            uploaded_by=None,  # TODO: заменить на current_user.id из JWT
+            uploaded_by=user.id,
         )
     except DocumentValidationError as e:
         raise HTTPException(
@@ -52,6 +54,7 @@ async def upload_document(
     response_model=DocumentListResponse,
 )
 async def get_documents(
+    _: ManagerUser,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status_filter: DocumentStatus | None = Query(None, alias="status"),
@@ -82,6 +85,7 @@ async def get_documents(
 )
 async def get_document_by_id(
     document_id: uuid.UUID,
+    _: ManagerUser,
     session: AsyncSession = Depends(get_db),
 ):
     return await _get_document_or_404(session, document_id)
@@ -91,6 +95,7 @@ async def get_document_by_id(
 async def update_document(
     document_id: uuid.UUID,
     payload: DocumentUpdate,
+    _: ManagerUser,
     session: AsyncSession = Depends(get_db),
 ):
     document = await _get_document_or_404(session, document_id)
@@ -103,6 +108,7 @@ async def update_document(
 )
 async def remove_document(
     document_id: uuid.UUID,
+    _: ManagerUser,
     session: AsyncSession = Depends(get_db),
 ):
     document = await _get_document_or_404(session, document_id)
@@ -113,7 +119,7 @@ async def remove_document(
 
 
 @router.post("/{document_id}/reindex", response_model=DocumentRead)
-async def reindex_document(document_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
+async def reindex_document(document_id: uuid.UUID, _: ManagerUser, session: AsyncSession = Depends(get_db)):
     document = await _get_document_or_404(session, document_id)
     try:
         return await documents_service.requeue_for_reindex(session, document)

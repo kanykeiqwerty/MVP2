@@ -31,14 +31,15 @@ class ConversationUpdate(BaseModel):
  
 class ConversationRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
- 
+
     id: uuid.UUID
     user_id: uuid.UUID
     title: str | None = None
     created_at: datetime
     updated_at: datetime
- 
- 
+    message_count: int = 0
+
+
 ConversationListResponse = Page[ConversationRead]
  
  
@@ -100,4 +101,22 @@ class ChatResponse(BaseModel):
     """Ответ ассистента вместе с использованными источниками."""
     conversation_id: uuid.UUID
     message: MessageRead
+
+
+# ---------- Оценка ответа ----------
+
+class MessageFeedbackRequest(BaseModel):
+    is_useful: bool
+    comment: str | None = Field(default=None, max_length=1000)
+
+
+class MessageFeedbackRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    message_id: uuid.UUID
+    user_id: uuid.UUID
+    is_useful: bool
+    comment: str | None = None
+    created_at: datetime
  

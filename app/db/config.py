@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     CHAT_MODEL: str = "gpt-4o-mini"
     RETRIEVAL_TOP_K: int = 5
     RETRIEVAL_MIN_SCORE: float = 0.15
+    # Сколько последних сообщений диалога подмешивать в промпт LLM для контекста
+    CHAT_HISTORY_LIMIT: int = 10
     # Пока нет JWT-авторизации — все диалоги идут от одного служебного юзера,
     # который создаётся автоматически при старте приложения (см. main.py).
     DEFAULT_USER_ID: uuid.UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")

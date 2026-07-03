@@ -51,12 +51,16 @@ def _map_error(exc: Exception) -> LLMError:
     return LLMError(f"Непредвиденная ошибка при обращении к LLM: {exc}", retriable=True)
 
 
-async def generate_answer(question: str, context_chunks: list[str]) -> str:
+async def generate_answer(
+    question: str,
+    context_chunks: list[str],
+    history: list[dict[str, str]] | None = None,
+) -> str:
     context = "\n\n---\n\n".join(context_chunks)
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Контекст:\n{context}\n\nВопрос: {question}"},
-    ]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": f"Контекст:\n{context}\n\nВопрос: {question}"})
     try:
         response = await _async_client.chat.completions.create(
             model=settings.CHAT_MODEL,
