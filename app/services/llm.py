@@ -4,6 +4,8 @@
 ошибка обращения к OpenAI заворачивается в LLMError.
 """
 
+from collections.abc import AsyncGenerator
+
 from openai import (
     APIConnectionError,
     APIError,
@@ -51,16 +53,25 @@ def _map_error(exc: Exception) -> LLMError:
     return LLMError(f"Непредвиденная ошибка при обращении к LLM: {exc}", retriable=True)
 
 
-async def generate_answer(
+def _build_messages(
     question: str,
     context_chunks: list[str],
-    history: list[dict[str, str]] | None = None,
-) -> str:
+    history: list[dict[str, str]] | None,
+) -> list[dict[str, str]]:
     context = "\n\n---\n\n".join(context_chunks)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": f"Контекст:\n{context}\n\nВопрос: {question}"})
+    return messages
+
+
+async def generate_answer(
+    question: str,
+    context_chunks: list[str],
+    history: list[dict[str, str]] | None = None,
+) -> str:
+    messages = _build_messages(question, context_chunks, history)
     try:
         response = await _async_client.chat.completions.create(
             model=settings.CHAT_MODEL,
@@ -70,3 +81,27 @@ async def generate_answer(
     except Exception as exc:
         raise _map_error(exc) from exc
     return response.choices[0].message.content or ""
+
+
+async def generate_answer_stream(
+    question: str,
+    context_chunks: list[str],
+    history: list[dict[str, str]] | None = None,
+) -> AsyncGenerator[str, None]:
+    """Стримит ответ по кусочкам текста (delta) по мере поступления от OpenAI."""
+    messages = _build_messages(question, context_chunks, history)
+    try:
+        stream = await _async_client.chat.completions.create(
+            model=settings.CHAT_MODEL,
+            messages=messages,
+            temperature=0.2,
+            stream=True,
+        )
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+    except Exception as exc:
+        raise _map_error(exc) from exc

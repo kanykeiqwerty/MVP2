@@ -157,3 +157,6 @@ class DocumentChunkRead(BaseModel):
     page_number: int | None = None
     token_count: int | None = None
     created_at: datetime
+
+
+DocumentChunkListResponse = Page[DocumentChunkRead]

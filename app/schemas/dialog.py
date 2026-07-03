@@ -82,8 +82,18 @@ class MessageRead(BaseModel):
  
  
 class ConversationWithMessages(ConversationRead):
-    """Диалог вместе со всей историей сообщений (для открытия чата)."""
+    """Диалог вместе с последней страницей сообщений (для открытия чата).
+    Более старые сообщения подгружаются через
+    GET /dialog/conversations/{id}/messages?before=<message_id> —
+    infinite scroll вверх."""
     messages: list[MessageRead] = []
+    has_more_messages: bool = False
+
+
+class MessagePage(BaseModel):
+    """Страница истории сообщений для подгрузки при прокрутке вверх."""
+    items: list[MessageRead]
+    has_more: bool
  
  
 # ---------- Входная точка API для чата ----------

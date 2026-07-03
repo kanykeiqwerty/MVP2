@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import date
 
 from sqlalchemy import func, or_, select
@@ -20,8 +22,8 @@ from app.models.dialog import (
 )
 from app.models.documents import Document, DocumentChunk
 from app.schemas.dialog import MessageRead, MessageSourceDetailed
-from app.services.llm import LLMError, generate_answer
-from app.services.retrieval import search_chunks
+from app.services.llm import LLMError, generate_answer, generate_answer_stream
+from app.services.retrieval import RetrievedChunk, search_chunks
 
 NO_CONTEXT_ANSWER = "Не нашёл информации по этому вопросу в загруженных документах."
 TITLE_MAX_LENGTH = 200
@@ -129,20 +131,130 @@ async def handle_chat_message(
     session.add(assistant_message)
     await session.flush()  # чтобы получить assistant_message.id для источников
 
-    for rank, result in enumerate(results, start=1):
-        session.add(
-            MessageSource(
-                message_id=assistant_message.id,
-                document_chunk_id=result.chunk.id,
-                document_id=result.chunk.document_id,
-                relevance_score=result.similarity,
-                rank=rank,
-            )
-        )
+    for source in _build_sources(assistant_message.id, results):
+        session.add(source)
 
     await session.commit()
     await session.refresh(assistant_message)
     return assistant_message
+
+
+def _build_sources(message_id: uuid.UUID, results: list[RetrievedChunk]) -> list[MessageSource]:
+    return [
+        MessageSource(
+            message_id=message_id,
+            document_chunk_id=result.chunk.id,
+            document_id=result.chunk.document_id,
+            relevance_score=result.similarity,
+            rank=rank,
+        )
+        for rank, result in enumerate(results, start=1)
+    ]
+
+
+async def handle_chat_message_stream(
+    session: AsyncSession,
+    *,
+    conversation_id: uuid.UUID | None,
+    content: str,
+    user_id: uuid.UUID,
+) -> AsyncGenerator[tuple[str, dict], None]:
+    """SSE-генератор для стриминга ответа ассистента.
+
+    Отдаёт пары (event, data), которые endpoint форматирует в SSE:
+    - "start": {conversation_id, message_id} — сразу после сохранения вопроса,
+      чтобы фронт мог отрисовать сообщение пользователя и id для фидбека;
+    - "delta": {content} — очередной кусочек текста ответа;
+    - "done": сериализованный MessageRead — финальное сообщение с источниками;
+    - "error": {message, retriable} — если LLM недоступен/упал по пути.
+    """
+    conversation = await _get_or_create_conversation(session, conversation_id, user_id)
+
+    if conversation.title is None:
+        conversation.title = content.strip()[:TITLE_MAX_LENGTH]
+
+    history = await _get_recent_history(session, conversation.id, settings.CHAT_HISTORY_LIMIT)
+
+    session.add(
+        Message(
+            conversation_id=conversation.id,
+            role=MessageRole.user,
+            content=content,
+            status=MessageStatus.completed,
+        )
+    )
+
+    assistant_message = Message(
+        conversation_id=conversation.id,
+        role=MessageRole.assistant,
+        content="",
+        status=MessageStatus.streaming,
+    )
+    session.add(assistant_message)
+    await session.commit()
+    await session.refresh(assistant_message)
+
+    yield "start", {
+        "conversation_id": str(conversation.id),
+        "message_id": str(assistant_message.id),
+    }
+
+    results = await search_chunks(
+        session,
+        query=content,
+        top_k=settings.RETRIEVAL_TOP_K,
+        min_score=settings.RETRIEVAL_MIN_SCORE,
+    )
+
+    if not results:
+        assistant_message.content = NO_CONTEXT_ANSWER
+        assistant_message.status = MessageStatus.completed
+        await session.commit()
+        await session.refresh(assistant_message)
+
+        yield "delta", {"content": NO_CONTEXT_ANSWER}
+        message_read = await to_message_read(session, assistant_message)
+        yield "done", message_read.model_dump(mode="json")
+        return
+
+    chunks: list[str] = []
+    try:
+        async for delta in generate_answer_stream(
+            content, [r.chunk.content for r in results], history=history
+        ):
+            chunks.append(delta)
+            yield "delta", {"content": delta}
+    except LLMError as exc:
+        assistant_message.content = "".join(chunks)
+        assistant_message.status = MessageStatus.error
+        assistant_message.error_message = str(exc)
+        await session.commit()
+        yield "error", {"message": str(exc), "retriable": exc.retriable}
+        return
+    except (GeneratorExit, asyncio.CancelledError):
+        # Клиент отключился (закрыл вкладку/оборвал соединение) до того, как
+        # ответ был дописан целиком — сохраняем то, что уже успели
+        # сгенерировать, вместо того чтобы бросать сообщение в статусе
+        # "streaming" навсегда. Дальше не yield'им — GeneratorExit нельзя
+        # "проглотить" продолжением генерации, можно только убрать за собой.
+        assistant_message.content = "".join(chunks)
+        assistant_message.status = MessageStatus.error
+        assistant_message.error_message = "Соединение прервано до завершения ответа"
+        await session.commit()
+        raise
+
+    assistant_message.content = "".join(chunks)
+    assistant_message.status = MessageStatus.completed
+    await session.flush()  # чтобы получить assistant_message.id для источников
+
+    for source in _build_sources(assistant_message.id, results):
+        session.add(source)
+
+    await session.commit()
+    await session.refresh(assistant_message)
+
+    message_read = await to_message_read(session, assistant_message)
+    yield "done", message_read.model_dump(mode="json")
 
 
 async def _load_sources_detailed(
@@ -259,15 +371,41 @@ async def list_conversations(
     return rows, total
 
 
-async def get_conversation_with_messages(
-    session: AsyncSession, conversation_id: uuid.UUID
-) -> Conversation | None:
-    query = (
-        select(Conversation)
-        .where(Conversation.id == conversation_id)
-        .options(selectinload(Conversation.messages))
-    )
-    return (await session.execute(query)).scalar_one_or_none()
+async def get_conversation(session: AsyncSession, conversation_id: uuid.UUID) -> Conversation | None:
+    return await session.get(Conversation, conversation_id)
+
+
+async def count_messages(session: AsyncSession, conversation_id: uuid.UUID) -> int:
+    query = select(func.count()).select_from(Message).where(Message.conversation_id == conversation_id)
+    return (await session.execute(query)).scalar_one()
+
+
+async def get_messages_page(
+    session: AsyncSession,
+    conversation_id: uuid.UUID,
+    *,
+    before_id: uuid.UUID | None,
+    limit: int,
+) -> tuple[list[Message], bool]:
+    """Страница сообщений диалога для infinite scroll вверх: если before_id
+    не задан — последние `limit` сообщений (открытие диалога), иначе —
+    `limit` сообщений старше указанного. Возвращает их в хронологическом
+    порядке и признак, есть ли ещё более старые сообщения."""
+    query = select(Message).where(Message.conversation_id == conversation_id)
+
+    if before_id is not None:
+        before_message = await session.get(Message, before_id)
+        if before_message is None:
+            raise NotFoundError("Message not found")
+        query = query.where(Message.created_at < before_message.created_at)
+
+    query = query.order_by(Message.created_at.desc()).limit(limit + 1)
+    rows = list((await session.execute(query)).scalars().all())
+
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    rows.reverse()
+    return rows, has_more
 
 
 async def delete_conversation(session: AsyncSession, conversation: Conversation) -> None:

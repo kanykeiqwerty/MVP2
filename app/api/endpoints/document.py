@@ -8,6 +8,7 @@ from app.core.deps import CurrentUser, ManagerUser
 from app.db.session import get_db
 from app.models.documents import Document, DocumentFileType, DocumentStatus
 from app.schemas.documents import (
+    DocumentChunkListResponse,
     DocumentListResponse,
     DocumentRead,
     DocumentUpdate,
@@ -97,6 +98,33 @@ async def get_document_by_id(
     session: AsyncSession = Depends(get_db),
 ):
     return await _get_document_or_404(session, document_id)
+
+
+@router.get(
+    "/{document_id}/chunks",
+    response_model=DocumentChunkListResponse,
+)
+async def get_document_chunks(
+    document_id: uuid.UUID,
+    _: CurrentUser,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db),
+):
+    await _get_document_or_404(session, document_id)
+    chunks, total = await documents_service.list_chunks(
+        session,
+        document_id,
+        page=page,
+        page_size=page_size,
+    )
+
+    return DocumentChunkListResponse(
+        items=chunks,
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/{document_id}/download")

@@ -111,6 +111,30 @@ async def get_document(session: AsyncSession, document_id: uuid.UUID) -> Documen
     return await session.get(Document, document_id)
 
 
+async def list_chunks(
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    *,
+    page: int,
+    page_size: int,
+) -> tuple[list[DocumentChunk], int]:
+    count_query = select(func.count()).select_from(DocumentChunk).where(
+        DocumentChunk.document_id == document_id
+    )
+    total = (await session.execute(count_query)).scalar_one()
+
+    query = (
+        select(DocumentChunk)
+        .where(DocumentChunk.document_id == document_id)
+        .order_by(DocumentChunk.chunk_index)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    items = (await session.execute(query)).scalars().all()
+
+    return list(items), total
+
+
 async def get_document_with_logs(session: AsyncSession, document_id: uuid.UUID) -> Document | None:
     query = (
         select(Document)
