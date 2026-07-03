@@ -20,8 +20,11 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# Override URL from .env (strips SSL params incompatible with asyncpg)
-config.set_main_option("sqlalchemy.url", database_url())
+# Override URL from .env (strips SSL params incompatible with asyncpg).
+# configparser трактует '%' как интерполяцию, а URL-кодированный пароль
+# (напр. %2B%23) содержит '%', поэтому экранируем его как '%%'. При чтении
+# через get_main_option (offline-режим) configparser вернёт исходный URL.
+config.set_main_option("sqlalchemy.url", database_url().replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:

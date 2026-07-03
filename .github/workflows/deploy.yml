@@ -90,9 +90,9 @@ jobs:
             kubectl rollout status deployment/mvp2 -n mvp2 --timeout=10m || {
               echo "=== Pods ==="; kubectl get pods -n mvp2 -o wide
               echo "=== Describe ==="; kubectl describe deployment mvp2 -n mvp2
-              echo "=== init(migrate) logs ==="; kubectl logs -n mvp2 -l app.kubernetes.io/name=mvp2 -c migrate --tail=80 || true
-              echo "=== api logs ==="; kubectl logs -n mvp2 -l app.kubernetes.io/name=mvp2 -c api --tail=80 || true
-              echo "=== worker logs ==="; kubectl logs -n mvp2 -l app.kubernetes.io/name=mvp2 -c worker --tail=80 || true
+              echo "=== init(migrate) logs ==="; kubectl logs -n mvp2 -l app.kubernetes.io/component=app -c migrate --tail=80 || true
+              echo "=== api logs ==="; kubectl logs -n mvp2 -l app.kubernetes.io/component=app -c api --tail=80 || true
+              echo "=== worker logs ==="; kubectl logs -n mvp2 -l app.kubernetes.io/component=app -c worker --tail=80 || true
               exit 1
             }
 
