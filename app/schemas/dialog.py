@@ -60,6 +60,7 @@ class MessageSourceDetailed(MessageSourceRead):
     """Источник вместе с содержимым чанка и названием документа —
     удобно отдавать сразу на фронт, без дополнительных запросов."""
     document_title: str
+    document_download_url: str
     chunk_content: str
     chunk_page_number: int | None = None
     chunk_section_title: str | None = None

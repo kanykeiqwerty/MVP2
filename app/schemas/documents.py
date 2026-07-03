@@ -14,12 +14,13 @@ import uuid
 from datetime import datetime
 from typing import Generic, TypeVar
  
-from pydantic import BaseModel, ConfigDict, Field
- 
+from pydantic import BaseModel, ConfigDict, Field, computed_field
+
+from app.core.urls import document_download_url
 from app.models.documents import (
     DocumentFileType,
     DocumentStatus,
-    
+
 )
 
 T = TypeVar("T")
@@ -99,8 +100,13 @@ class DocumentRead(DocumentBase):
     uploaded_at: datetime
     indexed_at: datetime | None = None
     updated_at: datetime
- 
- 
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def download_url(self) -> str:
+        return document_download_url(self.id, file_type=self.file_type)
+
+
 class DocumentInternalRead(DocumentRead):
     """
     Полная версия документа для внутреннего использования

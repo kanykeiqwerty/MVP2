@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "INFO"
     api_v1_prefix: str = "/api/v1"
+    # Публичный адрес бэкенда — нужен, чтобы отдавать фронту абсолютные
+    # ссылки (например, на скачивание документа-источника из диалога).
+    base_url: str = "http://localhost:8000"
 
     # Telegram alerts — forwards ERROR/WARNING logs to a chat (disabled if unset)
     telegram_bot_token: str = ""

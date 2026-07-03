@@ -1,9 +1,10 @@
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import ManagerUser
+from app.core.deps import CurrentUser, ManagerUser
 from app.db.session import get_db
 from app.models.documents import Document, DocumentFileType, DocumentStatus
 from app.schemas.documents import (
@@ -13,6 +14,13 @@ from app.schemas.documents import (
 )
 from app.services import documents_service
 from app.services.documents_service import DocumentValidationError
+from app.services.storage import get_storage_backend
+
+DOCUMENT_MEDIA_TYPES = {
+    DocumentFileType.pdf: "application/pdf",
+    DocumentFileType.docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    DocumentFileType.txt: "text/plain",
+}
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -54,7 +62,7 @@ async def upload_document(
     response_model=DocumentListResponse,
 )
 async def get_documents(
-    _: ManagerUser,
+    _: CurrentUser,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status_filter: DocumentStatus | None = Query(None, alias="status"),
@@ -85,10 +93,28 @@ async def get_documents(
 )
 async def get_document_by_id(
     document_id: uuid.UUID,
-    _: ManagerUser,
+    _: CurrentUser,
     session: AsyncSession = Depends(get_db),
 ):
     return await _get_document_or_404(session, document_id)
+
+
+@router.get("/{document_id}/download")
+async def download_document(
+    document_id: uuid.UUID,
+    _: CurrentUser,
+    session: AsyncSession = Depends(get_db),
+):
+    document = await _get_document_or_404(session, document_id)
+    storage = get_storage_backend()
+    path = storage.get_path(document.storage_path)
+    if not path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл документа не найден")
+    return FileResponse(
+        path=path,
+        media_type=DOCUMENT_MEDIA_TYPES[document.file_type],
+        filename=document.original_filename,
+    )
 
 
 @router.patch("/{document_id}", response_model=DocumentRead)

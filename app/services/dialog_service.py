@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFoundError
+from app.core.urls import document_download_url
 from app.db.config import settings
 from app.models.dialog import (
     Conversation,
@@ -153,7 +154,7 @@ async def _load_sources_detailed(
     дальше ходить в /documents за каждым чанком отдельно.
     """
     query = (
-        select(MessageSource, DocumentChunk, Document.title)
+        select(MessageSource, DocumentChunk, Document.title, Document.file_type)
         .join(DocumentChunk, DocumentChunk.id == MessageSource.document_chunk_id)
         .join(Document, Document.id == MessageSource.document_id)
         .where(MessageSource.message_id == message_id)
@@ -169,11 +170,14 @@ async def _load_sources_detailed(
             rank=source.rank,
             created_at=source.created_at,
             document_title=title,
+            document_download_url=document_download_url(
+                source.document_id, file_type=file_type, page_number=chunk.page_number
+            ),
             chunk_content=chunk.content,
             chunk_page_number=chunk.page_number,
             chunk_section_title=chunk.section_title,
         )
-        for source, chunk, title in rows
+        for source, chunk, title, file_type in rows
     ]
 
 
