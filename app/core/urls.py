@@ -29,3 +29,17 @@ def document_download_url(
     if file_type == DocumentFileType.pdf and page_number is not None:
         url += f"#page={page_number}"
     return url
+
+
+def document_text_url(document_id: uuid.UUID) -> str:
+    """Абсолютная ссылка на GET /documents/{id}/text — весь текст документа
+    одним куском, для подсветки фрагмента по chunk_start_offset/chunk_end_offset
+    из MessageSourceFragment (внутри MessageSourceDocument).
+
+    Как и document_download_url, содержит короткоживущий токен в
+    query-строке — ссылку открывают напрямую, без Authorization-заголовка."""
+    token = create_document_download_token(document_id)
+    return (
+        f"{settings.base_url.rstrip('/')}{settings.api_v1_prefix}"
+        f"/documents/{document_id}/text?token={token}"
+    )

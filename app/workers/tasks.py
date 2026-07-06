@@ -9,7 +9,7 @@ from app.db.sync_session import SyncSessionLocal
 from app.models.documents import Document, DocumentChunk, DocumentStatus, DocumentStatusLog
 from app.services.chunking import recursive_chunk
 from app.services.embedding import embed_texts_sync
-from app.services.parsing import ParsingError, extract_text
+from app.services.parsing import ParsingError, extract_text_with_pages
 from app.services.storage import get_storage_backend
 
 
@@ -49,9 +49,10 @@ def index_document(self, document_id: str) -> None:
         try:
             storage = get_storage_backend()
             file_path = storage.get_path(document.storage_path)
-            text = extract_text(str(file_path), document.file_type)
+            text, page_breaks = extract_text_with_pages(str(file_path), document.file_type)
             chunks = recursive_chunk(
                 text,
+                page_breaks,
                 chunk_size=settings.CHUNK_SIZE,
                 overlap=settings.CHUNK_OVERLAP,
             )
@@ -78,6 +79,8 @@ def index_document(self, document_id: str) -> None:
                             embedding_model=settings.EMBEDDING_MODEL,
                             section_title=chunk.section_title,
                             page_number=chunk.page_number,
+                            start_offset=chunk.start_offset,
+                            end_offset=chunk.end_offset,
                             token_count=max(1, len(chunk.content) // 4),
                         )
                     )

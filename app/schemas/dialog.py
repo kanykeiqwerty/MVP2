@@ -44,26 +44,34 @@ ConversationListResponse = Page[ConversationRead]
  
  
 # ---------- Источники ответа ----------
- 
-class MessageSourceRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
- 
+
+class MessageSourceFragment(BaseModel):
+    """Один чанк-источник внутри документа — конкретный фрагмент текста,
+    из которого собран ответ."""
     id: uuid.UUID
     document_chunk_id: uuid.UUID
-    document_id: uuid.UUID
     relevance_score: float | None = None
     rank: int
-    created_at: datetime
- 
- 
-class MessageSourceDetailed(MessageSourceRead):
-    """Источник вместе с содержимым чанка и названием документа —
-    удобно отдавать сразу на фронт, без дополнительных запросов."""
-    document_title: str
-    document_download_url: str
     chunk_content: str
+    chunk_index: int
     chunk_page_number: int | None = None
     chunk_section_title: str | None = None
+    # Смещения (в символах) фрагмента в тексте, который отдаёт
+    # GET /documents/{id}/text — null у чанков, проиндексированных до
+    # появления этих колонок (требуется переиндексация документа).
+    chunk_start_offset: int | None = None
+    chunk_end_offset: int | None = None
+
+
+class MessageSourceDocument(BaseModel):
+    """Источники ответа, сгруппированные по документу: одна ссылка на файл,
+    внутри — все фрагменты этого документа, из которых собран ответ (для
+    подсветки в тексте по document_text_url)."""
+    document_id: uuid.UUID
+    document_title: str
+    document_download_url: str
+    document_text_url: str
+    fragments: list[MessageSourceFragment]
  
  
 # ---------- Сообщения ----------
@@ -78,7 +86,7 @@ class MessageRead(BaseModel):
     status: MessageStatus
     error_message: str | None = None
     created_at: datetime
-    sources: list[MessageSourceDetailed] = []
+    sources: list[MessageSourceDocument] = []
  
  
 class ConversationWithMessages(ConversationRead):

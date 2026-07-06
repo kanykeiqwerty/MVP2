@@ -143,20 +143,34 @@ class DocumentChunkInternalCreate(BaseModel):
     content: str
     section_title: str | None = Field(default=None, max_length=500)
     page_number: int | None = None
+    start_offset: int | None = None
+    end_offset: int | None = None
     token_count: int | None = None
- 
- 
+
+
 class DocumentChunkRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
- 
+
     id: uuid.UUID
     document_id: uuid.UUID
     chunk_index: int
     content: str
     section_title: str | None = None
     page_number: int | None = None
+    start_offset: int | None = None
+    end_offset: int | None = None
     token_count: int | None = None
     created_at: datetime
 
 
 DocumentChunkListResponse = Page[DocumentChunkRead]
+
+
+# ---------- Полный текст документа ----------
+
+class DocumentTextRead(BaseModel):
+    """Весь извлечённый текст документа одним куском (без нарезки на чанки) —
+    для просмотра/экспорта и для подсветки фрагментов по
+    chunk_start_offset/chunk_end_offset из MessageSourceFragment."""
+    document_id: uuid.UUID
+    text: str

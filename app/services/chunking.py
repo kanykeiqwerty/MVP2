@@ -11,10 +11,16 @@ Recursive-чанкинг.
   4. Если абзац похож на заголовок (короткая строка/markdown-заголовок/
      строка без завершающей точки), он становится текущим section_title
      для последующих чанков.
-  5. Маркеры "--PAGE:N--" (расставленные parsing.py для PDF) не попадают
-     в текст чанка, но обновляют текущий page_number.
+  5. page_number чанка определяется по page_breaks (см. parsing.py) —
+     границам страниц PDF в том же тексте, который передан сюда.
   6. Абзац длиннее chunk_size режется жёстко, но по границе слова, а не
      произвольно посередине.
+
+Все позиции (start_offset/end_offset чанка) — это реальные смещения в
+символах в исходном тексте, поэтому content чанка всегда РОВНО равен
+text[start_offset:end_offset] — это важно для фронта: он подсвечивает
+именно этот диапазон в тексте, который отдаёт GET /documents/{id}/text
+(это тот же текст, что передаётся сюда при индексации).
 
 Это достаточно для MVP; семантический чанкинг (эмбеддинг-based split)
 можно добавить позже как отдельную стратегию с тем же интерфейсом.
@@ -23,7 +29,9 @@ Recursive-чанкинг.
 import re
 from dataclasses import dataclass
 
-_PAGE_RE = re.compile(r"--PAGE:(\d+)--")
+from app.services.parsing import PageBreak
+
+_PARAGRAPH_SEP_RE = re.compile(r"\n\s*\n")
 _MD_HEADING_RE = re.compile(r"^#{1,6}\s+.+$")
 _CAPS_HEADING_RE = re.compile(r"^[A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9 \-.,:№]{3,90}$")
 
@@ -36,6 +44,8 @@ _SENTENCE_ENDINGS = (".", "!", "?", ",", ";")
 class Chunk:
     index: int
     content: str
+    start_offset: int
+    end_offset: int
     page_number: int | None
     section_title: str | None
 
@@ -63,119 +73,162 @@ def _looks_like_heading(paragraph: str) -> bool:
     return False
 
 
-def _split_on_word_boundary(text: str, max_len: int) -> tuple[str, str]:
-    """(piece, remainder): piece не длиннее max_len, разрез по ближайшему пробелу слева."""
-    if len(text) <= max_len:
-        return text, ""
-    cut = text.rfind(" ", 0, max_len)
-    if cut <= 0:
-        cut = max_len  # пробелов вообще нет (например, одно длинное слово) — режем жёстко
-    return text[:cut].rstrip(), text[cut:].lstrip()
+def _paragraph_spans(text: str) -> list[tuple[int, int]]:
+    """Границы абзацев (start, end) в символах, разделённых пустой строкой,
+    уже обрезанные от краевых пробелов/переводов строк."""
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    for match in _PARAGRAPH_SEP_RE.finditer(text):
+        spans.append((pos, match.start()))
+        pos = match.end()
+    spans.append((pos, len(text)))
+
+    trimmed: list[tuple[int, int]] = []
+    for start, end in spans:
+        while start < end and text[start].isspace():
+            start += 1
+        while end > start and text[end - 1].isspace():
+            end -= 1
+        if end > start:
+            trimmed.append((start, end))
+    return trimmed
 
 
-def _trim_to_word_boundary(text: str, overlap: int) -> str:
-    """Хвост текста длиной ~overlap символов, обрезанный по границе слова."""
-    if overlap <= 0 or not text:
-        return ""
-    tail = text[-overlap:]
-    if len(tail) < len(text):
-        space = tail.find(" ")
-        if space != -1:
-            tail = tail[space + 1 :]
-    return tail
+def _page_at(page_breaks: list[PageBreak], offset: int) -> int | None:
+    page: int | None = None
+    for pb in page_breaks:
+        if pb.offset <= offset:
+            page = pb.page_number
+        else:
+            break
+    return page
 
 
 def recursive_chunk(
     text: str,
+    page_breaks: list[PageBreak] | None = None,
     chunk_size: int = 1000,
     overlap: int = 150,
 ) -> list[Chunk]:
     if not text or not text.strip():
         return []
 
-    paragraphs = re.split(r"\n\s*\n", text)
+    page_breaks = page_breaks or []
+    spans = _paragraph_spans(text)
+    if not spans:
+        return []
 
     chunks: list[Chunk] = []
-    buffer = ""
+    buffer_start: int | None = None
+    buffer_end = 0
     buffer_page: int | None = None
     buffer_section: str | None = None
-    current_page: int | None = None
     current_section: str | None = None
 
     def flush() -> None:
-        nonlocal buffer
-        if buffer.strip():
+        nonlocal buffer_start
+        if buffer_start is not None and buffer_end > buffer_start:
             chunks.append(
                 Chunk(
                     index=len(chunks),
-                    content=buffer.strip(),
+                    content=text[buffer_start:buffer_end],
+                    start_offset=buffer_start,
+                    end_offset=buffer_end,
                     page_number=buffer_page,
                     section_title=buffer_section,
                 )
             )
-        buffer = ""
+        buffer_start = None
 
-    def overlap_tail() -> str:
-        return _trim_to_word_boundary(chunks[-1].content, overlap) if chunks else ""
+    def overlap_start() -> int | None:
+        """Начало overlap-хвоста последнего сброшенного чанка, обрезанное
+        по границе слова, или None, если хвоста нет."""
+        if not chunks or overlap <= 0:
+            return None
+        prev = chunks[-1]
+        start = max(prev.start_offset, prev.end_offset - overlap)
+        if start > prev.start_offset:
+            space = text.find(" ", start, prev.end_offset)
+            if space != -1:
+                start = space + 1
+        return start if start < prev.end_offset else None
 
-    for raw_paragraph in paragraphs:
-        paragraph = raw_paragraph
-
-        page_match = _PAGE_RE.search(paragraph)
-        if page_match:
-            current_page = int(page_match.group(1))
-            paragraph = _PAGE_RE.sub("", paragraph).strip()
-            if not paragraph:
-                continue
+    for p_start, p_end in spans:
+        paragraph = text[p_start:p_end]
+        page = _page_at(page_breaks, p_start)
 
         is_heading = _looks_like_heading(paragraph)
         if is_heading:
-            current_section = paragraph.strip()
+            current_section = paragraph
 
-        if not buffer:
-            buffer_page = current_page
+        if buffer_start is None:
+            buffer_page = page
             buffer_section = current_section
         elif is_heading:
             # Заголовок встретился в уже непустом буфере (например, сразу после
             # жёсткого разреза длинного абзаца) — секцию всё равно обновляем.
             buffer_section = current_section
 
-        candidate = f"{buffer}\n\n{paragraph}" if buffer else paragraph
-
-        if len(candidate) <= chunk_size:
-            buffer = candidate
+        candidate_start = p_start if buffer_start is None else buffer_start
+        if p_end - candidate_start <= chunk_size:
+            buffer_start = candidate_start
+            buffer_end = p_end
             continue
 
         # Абзац целиком не влезает в текущий буфер — сбрасываем буфер
         flush()
-        buffer_page = current_page
+        buffer_page = page
         buffer_section = current_section
-        tail = overlap_tail()
+        ov_start = overlap_start()
 
-        if len(paragraph) <= chunk_size:
-            buffer = f"{tail} {paragraph}" if tail else paragraph
+        if p_end - p_start <= chunk_size:
+            buffer_start = ov_start if ov_start is not None else p_start
+            buffer_end = p_end
             continue
 
         # Сам абзац длиннее chunk_size — режем его жёстко, но по словам
-        buffer = tail
-        remaining = paragraph
-        while remaining:
-            available = chunk_size - len(buffer) - (1 if buffer else 0)
+        buffer_start = ov_start if ov_start is not None else p_start
+        buffer_end = buffer_start
+        cursor = p_start
+        while cursor < p_end:
+            available = chunk_size - (buffer_end - buffer_start)
             if available <= 0:
                 flush()
-                buffer_page = current_page
+                buffer_page = page
                 buffer_section = current_section
-                buffer = overlap_tail()
+                ov_start = overlap_start()
+                buffer_start = ov_start if ov_start is not None else cursor
+                buffer_end = buffer_start
                 continue
 
-            piece, remaining = _split_on_word_boundary(remaining, available)
-            buffer = f"{buffer} {piece}" if buffer else piece
+            if p_end - cursor <= available:
+                piece_end = p_end
+                next_cursor = p_end
+            else:
+                window_end = cursor + available
+                cut = text.rfind(" ", cursor, window_end)
+                if cut <= cursor:
+                    cut = window_end
+                piece_end = cut
+                while piece_end > cursor and text[piece_end - 1] == " ":
+                    piece_end -= 1
+                next_cursor = cut
+                while next_cursor < p_end and text[next_cursor] == " ":
+                    next_cursor += 1
+                if piece_end <= cursor:
+                    piece_end = window_end
+                    next_cursor = window_end
 
-            if remaining:
+            buffer_end = piece_end
+            cursor = next_cursor
+
+            if cursor < p_end:
                 flush()
-                buffer_page = current_page
+                buffer_page = page
                 buffer_section = current_section
-                buffer = overlap_tail()
+                ov_start = overlap_start()
+                buffer_start = ov_start if ov_start is not None else cursor
+                buffer_end = buffer_start
 
     flush()
     return chunks

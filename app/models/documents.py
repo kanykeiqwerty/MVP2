@@ -128,6 +128,13 @@ class DocumentChunk(Base):
     section_title: Mapped[str | None] = mapped_column(String(500))
     page_number: Mapped[int | None]
     token_count: Mapped[int | None]
+    # Смещения (в символах) начала/конца чанка в тексте, который отдаёт
+    # GET /documents/{id}/text — по ним фронт подсвечивает именно тот
+    # фрагмент, из которого собран ответ. Nullable: у чанков, оставшихся
+    # от индексации до появления этих колонок, точных смещений нет
+    # (нужна переиндексация документа).
+    start_offset: Mapped[int | None]
+    end_offset: Mapped[int | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
  
     document: Mapped["Document"] = relationship(back_populates="chunks")

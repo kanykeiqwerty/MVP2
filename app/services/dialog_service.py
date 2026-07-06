@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFoundError
-from app.core.urls import document_download_url
+from app.core.urls import document_download_url, document_text_url
 from app.db.config import settings
 from app.models.dialog import (
     Conversation,
@@ -21,7 +21,7 @@ from app.models.dialog import (
     MessageStatus,
 )
 from app.models.documents import Document, DocumentChunk
-from app.schemas.dialog import MessageRead, MessageSourceDetailed
+from app.schemas.dialog import MessageRead, MessageSourceDocument, MessageSourceFragment
 from app.services.llm import LLMError, generate_answer, generate_answer_stream
 from app.services.retrieval import RetrievedChunk, search_chunks
 
@@ -259,11 +259,15 @@ async def handle_chat_message_stream(
 
 async def _load_sources_detailed(
     session: AsyncSession, message_id: uuid.UUID
-) -> list[MessageSourceDetailed]:
+) -> list[MessageSourceDocument]:
     """
-    Источники сообщения вместе с текстом чанка, страницей и названием
-    документа — одним запросом с джойнами, чтобы фронту не нужно было
-    дальше ходить в /documents за каждым чанком отдельно.
+    Источники сообщения, сгруппированные по документу: одним запросом с
+    джойнами (чтобы фронту не нужно было дальше ходить в /documents за
+    каждым чанком отдельно), но на выходе — один объект на документ со
+    списком фрагментов, а не плоский список чанков. Если несколько чанков
+    одного документа попали в источники, это одна ссылка с несколькими
+    фрагментами для подсветки, а не несколько дублирующихся ссылок на
+    один и тот же файл.
     """
     query = (
         select(MessageSource, DocumentChunk, Document.title, Document.file_type)
@@ -273,24 +277,40 @@ async def _load_sources_detailed(
         .order_by(MessageSource.rank)
     )
     rows = (await session.execute(query)).all()
-    return [
-        MessageSourceDetailed(
-            id=source.id,
-            document_chunk_id=source.document_chunk_id,
-            document_id=source.document_id,
-            relevance_score=source.relevance_score,
-            rank=source.rank,
-            created_at=source.created_at,
-            document_title=title,
-            document_download_url=document_download_url(
-                source.document_id, file_type=file_type, page_number=chunk.page_number
-            ),
-            chunk_content=chunk.content,
-            chunk_page_number=chunk.page_number,
-            chunk_section_title=chunk.section_title,
+
+    groups: dict[uuid.UUID, MessageSourceDocument] = {}
+    order: list[uuid.UUID] = []
+    for source, chunk, title, file_type in rows:
+        doc_id = source.document_id
+        if doc_id not in groups:
+            groups[doc_id] = MessageSourceDocument(
+                document_id=doc_id,
+                document_title=title,
+                # Страница берётся у первого (= самого релевантного, т.к.
+                # строки уже отсортированы по rank) фрагмента этого документа.
+                document_download_url=document_download_url(
+                    doc_id, file_type=file_type, page_number=chunk.page_number
+                ),
+                document_text_url=document_text_url(doc_id),
+                fragments=[],
+            )
+            order.append(doc_id)
+        groups[doc_id].fragments.append(
+            MessageSourceFragment(
+                id=source.id,
+                document_chunk_id=source.document_chunk_id,
+                relevance_score=source.relevance_score,
+                rank=source.rank,
+                chunk_content=chunk.content,
+                chunk_index=chunk.chunk_index,
+                chunk_page_number=chunk.page_number,
+                chunk_section_title=chunk.section_title,
+                chunk_start_offset=chunk.start_offset,
+                chunk_end_offset=chunk.end_offset,
+            )
         )
-        for source, chunk, title, file_type in rows
-    ]
+
+    return [groups[doc_id] for doc_id in order]
 
 
 async def to_message_read(session: AsyncSession, message: Message) -> MessageRead:

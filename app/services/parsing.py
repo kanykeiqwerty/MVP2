@@ -1,25 +1,36 @@
 """
-Парсинг файлов -> "сырой" текст с маркерами страниц и заголовков.
+Парсинг файлов -> "сырой" текст + разметка структуры.
 
-Маркеры:
-  "--PAGE:N--"     — вставляется перед текстом страницы PDF, дальше
-                      chunking.py по нему восстанавливает page_number чанка.
-  "# Текст"        — псевдо-markdown заголовок. Для DOCX формируется из
-                      реального стиля параграфа (Heading N / Заголовок N),
-                      для PDF/TXT заголовки определяются эвристикой уже
-                      в chunking.py (там текста со стилями нет).
+extract_text_with_pages() возвращает чистый текст документа (без каких-либо
+служебных маркеров — это ровно то, что видит пользователь в
+GET /documents/{id}/text) вместе со списком PageBreak: где в этом тексте
+начинается каждая страница PDF. chunking.py использует page_breaks, чтобы
+проставить page_number чанку по его смещению в тексте, вместо старого
+подхода со вставкой "--PAGE:N--" прямо в текст (тот подход утекал наружу —
+маркер первой страницы не отрезался strip()'ом текста и был виден
+пользователю).
+
+Заголовки: "# Текст" — псевдо-markdown заголовок. Для DOCX формируется из
+реального стиля параграфа (Heading N / Заголовок N), для PDF/TXT заголовки
+определяются эвристикой уже в chunking.py (там текста со стилями нет).
 """
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 import pymupdf
 import docx
 from app.models.documents import DocumentFileType
 
-PAGE_MARKER_TEMPLATE = "\n\n--PAGE:{n}--\n"
-
 _TXT_ENCODINGS = ("utf-8", "utf-8-sig", "cp1251")
 _HEADING_LEVEL_RE = re.compile(r"(\d+)")
+
+
+@dataclass
+class PageBreak:
+    """offset — позиция в чистом тексте, с которой начинается страница page_number."""
+    offset: int
+    page_number: int
 
 
 class ParsingError(Exception):
@@ -27,14 +38,22 @@ class ParsingError(Exception):
 
 
 def extract_text(storage_path: str, file_type: DocumentFileType) -> str:
+    """Текст документа без разметки страниц — используется там, где номера
+    страниц не нужны (например, GET /documents/{id}/text)."""
+    return extract_text_with_pages(storage_path, file_type)[0]
+
+
+def extract_text_with_pages(
+    storage_path: str, file_type: DocumentFileType
+) -> tuple[str, list[PageBreak]]:
     path = Path(storage_path)
     match file_type:
         case DocumentFileType.txt:
-            return _extract_txt(path)
+            return _extract_txt(path), []
         case DocumentFileType.pdf:
             return _extract_pdf(path)
         case DocumentFileType.docx:
-            return _extract_docx(path)
+            return _extract_docx(path), []
         case _:
             raise ParsingError(f"Неподдерживаемый тип файла: {file_type}")
 
@@ -55,9 +74,7 @@ def _extract_txt(path: Path) -> str:
         raise ParsingError(f"Не удалось прочитать TXT-файл: {last_error or exc}") from exc
 
 
-def _extract_pdf(path: Path) -> str:
-    
-
+def _extract_pdf(path: Path) -> tuple[str, list[PageBreak]]:
     try:
         doc = pymupdf.open(str(path))
     except Exception as exc:
@@ -74,21 +91,31 @@ def _extract_pdf(path: Path) -> str:
                 raise ParsingError("PDF защищён паролем, извлечение невозможно") from exc
 
         parts: list[str] = []
+        page_breaks: list[PageBreak] = []
+        pos = 0
         for i, page in enumerate(doc, start=1):
             try:
                 text = page.get_text().strip()
             except Exception as exc:
                 raise ParsingError(f"Ошибка чтения страницы {i} PDF: {exc}") from exc
-            parts.append(PAGE_MARKER_TEMPLATE.format(n=i) + text)
+
+            if parts:
+                sep = "\n\n"
+                parts.append(sep)
+                pos += len(sep)
+
+            page_breaks.append(PageBreak(offset=pos, page_number=i))
+            parts.append(text)
+            pos += len(text)
     finally:
         doc.close()
 
-    full_text = "".join(parts).strip()
-    if not full_text:
+    full_text = "".join(parts)
+    if not full_text.strip():
         raise ParsingError(
             "Не удалось извлечь текст из PDF (возможно, это скан без OCR-слоя)"
         )
-    return full_text
+    return full_text, page_breaks
 
 
 def _heading_prefix(style_name: str) -> str | None:
@@ -104,8 +131,6 @@ def _heading_prefix(style_name: str) -> str | None:
 
 
 def _extract_docx(path: Path) -> str:
-    
-
     try:
         document = docx.Document(str(path))
     except Exception as exc:
@@ -133,5 +158,3 @@ def _extract_docx(path: Path) -> str:
     if not text:
         raise ParsingError("DOCX не содержит извлекаемого текста")
     return text
-
-

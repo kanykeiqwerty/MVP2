@@ -12,10 +12,12 @@ from app.schemas.documents import (
     DocumentChunkListResponse,
     DocumentListResponse,
     DocumentRead,
+    DocumentTextRead,
     DocumentUpdate,
 )
 from app.services import documents_service
 from app.services.documents_service import DocumentValidationError
+from app.services.parsing import ParsingError, extract_text
 from app.services.storage import get_storage_backend
 
 DOCUMENT_MEDIA_TYPES = {
@@ -32,6 +34,20 @@ async def _get_document_or_404(session: AsyncSession, document_id: uuid.UUID) ->
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Документ не найден")
     return document
+
+
+def _verify_document_token(document_id: uuid.UUID, token: str | None) -> None:
+    """Проверяет короткоживущий токен для ссылок, которые открывают напрямую
+    (переход по URL) — браузер в этом случае не может приложить
+    Authorization-заголовок, поэтому обычная Bearer-авторизация не подходит."""
+    if token is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Не авторизован")
+    try:
+        token_document_id = decode_document_download_token(token)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Ссылка недействительна или истекла")
+    if token_document_id != document_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Ссылка недействительна или истекла")
 
 
 @router.post(
@@ -128,6 +144,41 @@ async def get_document_chunks(
     )
 
 
+@router.get(
+    "/{document_id}/text",
+    response_model=DocumentTextRead,
+)
+async def get_document_text(
+    document_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    token: str | None = Query(None),
+):
+    """Весь текст документа одним куском — извлекается из исходного файла
+    заново (та же функция, что и при индексации), а не склеивается из
+    чанков, потому что соседние чанки специально хранятся с overlap'ом.
+
+    Это тот же текст, на который указывают start_offset/end_offset чанков
+    в MessageSourceFragment — по ним фронт подсвечивает нужный фрагмент.
+
+    Ссылку (document_text_url) открывают напрямую, поэтому вместо обычного
+    Bearer-заголовка принимает короткоживущий токен из query-строки — та же
+    схема, что и у /download."""
+    _verify_document_token(document_id, token)
+
+    document = await _get_document_or_404(session, document_id)
+    storage = get_storage_backend()
+    path = storage.get_path(document.storage_path)
+    if not path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл документа не найден")
+
+    try:
+        text = extract_text(str(path), document.file_type)
+    except ParsingError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    return DocumentTextRead(document_id=document.id, text=text)
+
+
 @router.get("/{document_id}/download")
 async def download_document(
     document_id: uuid.UUID,
@@ -139,14 +190,7 @@ async def download_document(
     Ссылку открывают напрямую (переход по URL), поэтому вместо обычного
     Bearer-заголовка принимает короткоживущий токен из query-строки,
     выданный на этот конкретный документ через document_download_url()."""
-    if token is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Не авторизован")
-    try:
-        token_document_id = decode_document_download_token(token)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Ссылка недействительна или истекла")
-    if token_document_id != document_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Ссылка недействительна или истекла")
+    _verify_document_token(document_id, token)
 
     document = await _get_document_or_404(session, document_id)
     storage = get_storage_backend()
