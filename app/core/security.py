@@ -35,6 +35,33 @@ def decode_access_token(token: str) -> dict[str, Any]:
         raise ValueError("Invalid token") from e
 
 
+DOCUMENT_DOWNLOAD_SCOPE = "document_download"
+DOCUMENT_DOWNLOAD_TOKEN_EXPIRE_MINUTES = 15
+
+
+def create_document_download_token(document_id: uuid.UUID) -> str:
+    """Короткоживущий токен на скачивание одного конкретного документа.
+
+    В отличие от access_token, его можно передавать прямо в query-строке
+    ссылки: браузер не может приложить Authorization-заголовок при переходе
+    по ссылке, а этот токен скоупнут только на один документ и живёт
+    считанные минуты, так что риск утечки в логах/истории минимален.
+    """
+    expire = now_local() + timedelta(minutes=DOCUMENT_DOWNLOAD_TOKEN_EXPIRE_MINUTES)
+    payload = {"doc": str(document_id), "scope": DOCUMENT_DOWNLOAD_SCOPE, "exp": expire}
+    return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
+
+
+def decode_document_download_token(token: str) -> uuid.UUID:
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+    except InvalidTokenError as e:
+        raise ValueError("Invalid token") from e
+    if payload.get("scope") != DOCUMENT_DOWNLOAD_SCOPE:
+        raise ValueError("Invalid token")
+    return uuid.UUID(payload["doc"])
+
+
 def generate_refresh_token() -> tuple[str, str]:
     """Возвращает (raw_token, sha256_hex_hash). Клиенту отдаём raw, в БД храним hash."""
     raw = secrets.token_urlsafe(32)

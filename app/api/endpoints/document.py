@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import CurrentUser, ManagerUser
+from app.core.security import decode_document_download_token
 from app.db.session import get_db
 from app.models.documents import Document, DocumentFileType, DocumentStatus
 from app.schemas.documents import (
@@ -130,9 +131,23 @@ async def get_document_chunks(
 @router.get("/{document_id}/download")
 async def download_document(
     document_id: uuid.UUID,
-    _: CurrentUser,
     session: AsyncSession = Depends(get_db),
+    token: str | None = Query(None),
 ):
+    """Отдаёт файл документа для просмотра во вкладке (inline).
+
+    Ссылку открывают напрямую (переход по URL), поэтому вместо обычного
+    Bearer-заголовка принимает короткоживущий токен из query-строки,
+    выданный на этот конкретный документ через document_download_url()."""
+    if token is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Не авторизован")
+    try:
+        token_document_id = decode_document_download_token(token)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Ссылка недействительна или истекла")
+    if token_document_id != document_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Ссылка недействительна или истекла")
+
     document = await _get_document_or_404(session, document_id)
     storage = get_storage_backend()
     path = storage.get_path(document.storage_path)
@@ -142,6 +157,7 @@ async def download_document(
         path=path,
         media_type=DOCUMENT_MEDIA_TYPES[document.file_type],
         filename=document.original_filename,
+        content_disposition_type="inline",
     )
 
 
