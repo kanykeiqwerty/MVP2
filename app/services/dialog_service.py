@@ -106,7 +106,7 @@ async def handle_chat_message(
         return assistant_message
 
     try:
-        answer = await generate_answer(
+        answer, used_sources = await generate_answer(
             content, [r.chunk.content for r in results], history=history
         )
     except LLMError as exc:
@@ -131,12 +131,26 @@ async def handle_chat_message(
     session.add(assistant_message)
     await session.flush()  # чтобы получить assistant_message.id для источников
 
-    for source in _build_sources(assistant_message.id, results):
+    cited_results = _filter_cited_results(results, used_sources)
+    for source in _build_sources(assistant_message.id, cited_results):
         session.add(source)
 
     await session.commit()
     await session.refresh(assistant_message)
     return assistant_message
+
+
+def _filter_cited_results(
+    results: list[RetrievedChunk], used_indices: set[int] | None
+) -> list[RetrievedChunk]:
+    """Оставляет только те найденные чанки, которые LLM реально указала в
+    служебной строке "ИСТОЧНИКИ: ...", а не всё, что прошло порог similarity
+    при поиске. used_indices=None — модель не проставила метку (не
+    выполнила формат) — доверять фильтрации нельзя, возвращаем все чанки,
+    как раньше."""
+    if used_indices is None:
+        return results
+    return [r for i, r in enumerate(results, start=1) if i in used_indices]
 
 
 def _build_sources(message_id: uuid.UUID, results: list[RetrievedChunk]) -> list[MessageSource]:
@@ -218,9 +232,13 @@ async def handle_chat_message_stream(
         return
 
     chunks: list[str] = []
+    used_sources_holder: dict[str, set[int] | None] = {}
     try:
         async for delta in generate_answer_stream(
-            content, [r.chunk.content for r in results], history=history
+            content,
+            [r.chunk.content for r in results],
+            history=history,
+            used_sources_out=used_sources_holder,
         ):
             chunks.append(delta)
             yield "delta", {"content": delta}
@@ -247,7 +265,8 @@ async def handle_chat_message_stream(
     assistant_message.status = MessageStatus.completed
     await session.flush()  # чтобы получить assistant_message.id для источников
 
-    for source in _build_sources(assistant_message.id, results):
+    cited_results = _filter_cited_results(results, used_sources_holder.get("used"))
+    for source in _build_sources(assistant_message.id, cited_results):
         session.add(source)
 
     await session.commit()
