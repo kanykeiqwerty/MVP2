@@ -2,10 +2,11 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import CurrentUser, ManagerUser
-from app.core.security import decode_document_download_token
+from app.core.deps import CurrentUser, ManagerUser, OptionalBearerCredentials
+from app.core.security import decode_access_token, decode_document_download_token
 from app.db.session import get_db
 from app.models.documents import Document, DocumentFileType, DocumentStatus
 from app.schemas.documents import (
@@ -19,6 +20,7 @@ from app.services import documents_service
 from app.services.documents_service import DocumentValidationError
 from app.services.parsing import ParsingError, extract_text
 from app.services.storage import get_storage_backend
+from app.services.user import UserService
 
 DOCUMENT_MEDIA_TYPES = {
     DocumentFileType.pdf: "application/pdf",
@@ -48,6 +50,30 @@ def _verify_document_token(document_id: uuid.UUID, token: str | None) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Ссылка недействительна или истекла")
     if token_document_id != document_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Ссылка недействительна или истекла")
+
+
+async def _authorize_document_access(
+    document_id: uuid.UUID,
+    token: str | None,
+    credentials: HTTPAuthorizationCredentials | None,
+    session: AsyncSession,
+) -> None:
+    """Доступ разрешён обычным Bearer-токеном — как и у всего остального API,
+    эндпоинт доступен в любой момент залогиненному пользователю — либо
+    короткоживущим token из query-строки, нужным только для прямых переходов
+    по ссылке-цитате из чата, где браузер не может приложить
+    Authorization-заголовок."""
+    if credentials is not None:
+        try:
+            payload = decode_access_token(credentials.credentials)
+            user_id = uuid.UUID(payload["sub"])
+        except (ValueError, KeyError):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Не авторизован")
+        user = await UserService(session).get_by_id(user_id)
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Не авторизован")
+        return
+    _verify_document_token(document_id, token)
 
 
 @router.post(
@@ -150,8 +176,16 @@ async def get_document_chunks(
 )
 async def get_document_text(
     document_id: uuid.UUID,
+    credentials: OptionalBearerCredentials,
     session: AsyncSession = Depends(get_db),
-    token: str | None = Query(None),
+    token: str | None = Query(
+        None,
+        description=(
+            "Нужен только при переходе по ссылке-цитате из чата (document_text_url), "
+            "где токен уже вшит автоматически и вводить его вручную не требуется. "
+            "При обычном обращении к API достаточно Bearer-авторизации."
+        ),
+    ),
 ):
     """Весь текст документа одним куском — извлекается из исходного файла
     заново (та же функция, что и при индексации), а не склеивается из
@@ -160,10 +194,11 @@ async def get_document_text(
     Это тот же текст, на который указывают start_offset/end_offset чанков
     в MessageSourceFragment — по ним фронт подсвечивает нужный фрагмент.
 
-    Ссылку (document_text_url) открывают напрямую, поэтому вместо обычного
-    Bearer-заголовка принимает короткоживущий токен из query-строки — та же
-    схема, что и у /download."""
-    _verify_document_token(document_id, token)
+    Доступен как по обычной Bearer-авторизации (для просмотра в приложении
+    в любой момент), так и по короткоживущему токену из query-строки — для
+    прямых переходов по ссылке-цитате из чата (document_text_url), где
+    браузер не может приложить Authorization-заголовок."""
+    await _authorize_document_access(document_id, token, credentials, session)
 
     document = await _get_document_or_404(session, document_id)
     storage = get_storage_backend()
@@ -182,15 +217,25 @@ async def get_document_text(
 @router.get("/{document_id}/download")
 async def download_document(
     document_id: uuid.UUID,
+    credentials: OptionalBearerCredentials,
     session: AsyncSession = Depends(get_db),
-    token: str | None = Query(None),
+    token: str | None = Query(
+        None,
+        description=(
+            "Нужен только при переходе по ссылке-цитате из чата (document_download_url), "
+            "где токен уже вшит автоматически и вводить его вручную не требуется. "
+            "При обычном обращении к API достаточно Bearer-авторизации."
+        ),
+    ),
 ):
     """Отдаёт файл документа для просмотра во вкладке (inline).
 
-    Ссылку открывают напрямую (переход по URL), поэтому вместо обычного
-    Bearer-заголовка принимает короткоживущий токен из query-строки,
-    выданный на этот конкретный документ через document_download_url()."""
-    _verify_document_token(document_id, token)
+    Доступен как по обычной Bearer-авторизации (для просмотра в приложении
+    в любой момент), так и по короткоживущему токену из query-строки,
+    выданному на этот конкретный документ через document_download_url() —
+    для прямых переходов по ссылке-цитате из чата, где браузер не может
+    приложить Authorization-заголовок."""
+    await _authorize_document_access(document_id, token, credentials, session)
 
     document = await _get_document_or_404(session, document_id)
     storage = get_storage_backend()

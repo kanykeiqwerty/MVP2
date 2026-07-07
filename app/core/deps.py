@@ -12,6 +12,7 @@ from app.models.user import User
 from app.services.user import UserService
 
 bearer_scheme = HTTPBearer()
+optional_bearer_scheme = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
@@ -51,3 +52,4 @@ DBSession = Annotated[AsyncSession, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
 AdminUser = Annotated[User, Depends(require_admin)]
 ManagerUser = Annotated[User, Depends(require_manager)]
+OptionalBearerCredentials = Annotated[HTTPAuthorizationCredentials | None, Depends(optional_bearer_scheme)]
